@@ -30,7 +30,7 @@ export const gptRequest = createAsyncThunk<ApiResponse, string>(
         },
         {
           headers: {
-            Authorization: `Bearer ${configFile.API_KEY}`,
+            Authorization: `Bearer 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`,
             "Content-Type": "application/json",
           },
         }
