@@ -1,6 +1,6 @@
 // Flow.tsx
 import React, { useCallback, useState, useEffect } from "react";
-import { useSelector } from "react-redux";
+import { useSelector, useDispatch } from "react-redux"; // Добавляем useDispatch
 import {
   Background,
   ReactFlow,
@@ -22,7 +22,6 @@ import {
 
 import "@xyflow/react/dist/style.css";
 
-// Импорты ваших функций и типов
 import {
   applyLayoutToNodes,
   transformApiDataToFlow,
@@ -31,38 +30,44 @@ import type { CustomNode, CustomEdge, CustomNodeData } from "./types";
 import type { RootState } from "./store/store";
 import { ProductNode } from "./components/product-node";
 import { TransformationNode } from "./components/transformation-node";
-
-// Типы для состояния GPT из store
+import { deleteNode, updateNode } from "./store/slices/gpt/gpt-slice";
+ // Импортируем actions
 
 const nodeTypes: NodeTypes = {
   product: ProductNode,
   transformation: TransformationNode,
 };
 
-// Кастомный стиль для связей
 const edgeStyles = {
   stroke: "#b1b1b7",
   strokeWidth: 2,
 };
 
 export const Flow: React.FC = () => {
-  // Получаем данные из Redux store
+  const dispatch = useDispatch(); // Добавляем dispatch
   const { data: apiData, loading } = useSelector(
     (state: RootState) => state.gpt
   );
 
-  // Состояние React Flow
   const [nodes, setNodes, onNodesChange] = useNodesState<CustomNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<CustomEdge>([]);
   const { getEdges, deleteElements, getNode, fitView } = useReactFlow();
 
-  // Состояние для меню узла
   const [nodeMenu, setNodeMenu] = useState<{
     id: string;
     top: number;
     left: number;
     label: string;
     description?: string;
+    type: string;
+  } | null>(null);
+
+  // Состояние для редактирования
+  const [editingNode, setEditingNode] = useState<{
+    id: string;
+    label: string;
+    description: string;
+    type: string;
   } | null>(null);
 
   // Загрузка и преобразование данных из store
@@ -71,31 +76,23 @@ export const Flow: React.FC = () => {
       console.log("Обнаружены данные в store, начинаю преобразование...");
 
       try {
-        // Преобразуем данные API в формат React Flow
         const { nodes: flowNodes, edges: flowEdges } =
           transformApiDataToFlow(apiData);
 
-        // Улучшаем стиль связей - убираем подписи и настраиваем внешний вид
         const improvedEdges = flowEdges.map((edge) => ({
           ...edge,
-          // Убираем label (подписи на связях)
           label: undefined,
-          // Настраиваем стиль связей
           style: edgeStyles,
-          // Тип связи для лучшего отображения
           type: "smoothstep",
-          // Убираем анимацию по умолчанию
           animated: false,
         }));
 
-        // Применяем автоматическое расположение
         const { nodes: layoutedNodes, edges: layoutedEdges } =
           applyLayoutToNodes(flowNodes, improvedEdges, "TB");
 
         setNodes(layoutedNodes);
         setEdges(layoutedEdges);
 
-        // Подгоняем вид после рендера
         setTimeout(() => fitView(), 100);
 
         console.log("Данные из store успешно загружены в React Flow:", {
@@ -108,23 +105,61 @@ export const Flow: React.FC = () => {
     }
   }, [apiData, setNodes, setEdges, fitView]);
 
-  // Функция для поиска всех потомков узла
-  const findAllDescendants = useCallback(
-    (nodeId: string, allNodes: Node[], allEdges: Edge[]): Node[] => {
+  // Функция для начала редактирования узла
+  const handleEditNode = useCallback((nodeId: string) => {
+    const node = getNode(nodeId);
+    if (node) {
+      const nodeData = node.data as CustomNodeData;
+      const originalNode = apiData?.nodes.find(n => n["Id узла"] === nodeId);
+      
+      setEditingNode({
+        id: nodeId,
+        label: nodeData.label,
+        description: nodeData.description || "",
+        type: originalNode?.["Тип"] || ""
+      });
+      setNodeMenu(null);
+    }
+  }, [getNode, apiData]);
+
+  // Функция для сохранения изменений узла
+  const handleSaveNode = useCallback(() => {
+    if (editingNode) {
+      dispatch(updateNode({
+        nodeId: editingNode.id,
+        updates: {
+          "Название": editingNode.label,
+          "Описание": editingNode.description
+        }
+      }));
+      setEditingNode(null);
+    }
+  }, [editingNode, dispatch]);
+
+  // Функция для отмены редактирования
+  const handleCancelEdit = useCallback(() => {
+    setEditingNode(null);
+  }, []);
+
+  // Обновленная функция удаления узла
+  const handleDeleteNode = useCallback((nodeId: string) => {
+    const nodeToDelete = getNode(nodeId);
+    if (!nodeToDelete) return;
+
+    const nodesToDelete = new Set<string>([nodeId]);
+    const edgesToDelete = new Set<string>();
+
+    const findAllDescendants = (nodeId: string, allNodes: Node[], allEdges: Edge[]): Node[] => {
       const visited = new Set<string>();
       const stack: string[] = [nodeId];
       const descendants: Node[] = [];
 
       while (stack.length > 0) {
         const currentId = stack.pop()!;
-
         if (visited.has(currentId)) continue;
         visited.add(currentId);
 
-        const outgoingEdges = allEdges.filter(
-          (edge) => edge.source === currentId
-        );
-
+        const outgoingEdges = allEdges.filter((edge) => edge.source === currentId);
         outgoingEdges.forEach((edge) => {
           if (!visited.has(edge.target)) {
             const childNode = allNodes.find((node) => node.id === edge.target);
@@ -135,50 +170,39 @@ export const Flow: React.FC = () => {
           }
         });
       }
-
       return descendants;
-    },
-    []
-  );
+    };
 
-  // Функция "умного" удаления
-  const handleDeleteNode = useCallback(
-    (nodeId: string) => {
-      const nodeToDelete = getNode(nodeId);
-      if (!nodeToDelete) return;
-
-      const nodesToDelete = new Set<string>([nodeId]);
-      const edgesToDelete = new Set<string>();
-
-      const allDescendants = findAllDescendants(nodeId, nodes, edges);
-
-      allDescendants.forEach((descendant) => {
-        const allParents = getIncomers(descendant, nodes, edges);
-        const remainingParents = allParents.filter(
-          (parent) => !nodesToDelete.has(parent.id)
-        );
-
-        if (remainingParents.length === 0) {
-          nodesToDelete.add(descendant.id);
-        }
-      });
-
-      const nodesToDeleteObjects = nodes.filter((node) =>
-        nodesToDelete.has(node.id)
+    const allDescendants = findAllDescendants(nodeId, nodes, edges);
+    allDescendants.forEach((descendant) => {
+      const allParents = getIncomers(descendant, nodes, edges);
+      const remainingParents = allParents.filter(
+        (parent) => !nodesToDelete.has(parent.id)
       );
-      const connectedEdges = getConnectedEdges(nodesToDeleteObjects, edges);
-      connectedEdges.forEach((edge) => edgesToDelete.add(edge.id));
+      if (remainingParents.length === 0) {
+        nodesToDelete.add(descendant.id);
+      }
+    });
 
-      deleteElements({
-        nodes: Array.from(nodesToDelete).map((id) => ({ id })),
-        edges: Array.from(edgesToDelete).map((id) => ({ id })),
-      });
-      setNodeMenu(null);
-    },
-    [nodes, edges, deleteElements, getNode, findAllDescendants]
-  );
+    const nodesToDeleteObjects = nodes.filter((node) =>
+      nodesToDelete.has(node.id)
+    );
+    const connectedEdges = getConnectedEdges(nodesToDeleteObjects, edges);
+    connectedEdges.forEach((edge) => edgesToDelete.add(edge.id));
 
-  // Обработчик соединений
+    // Удаляем из Redux store
+    dispatch(deleteNode(nodeId));
+    
+    // Удаляем из React Flow
+    deleteElements({
+      nodes: Array.from(nodesToDelete).map((id) => ({ id })),
+      edges: Array.from(edgesToDelete).map((id) => ({ id })),
+    });
+    
+    setNodeMenu(null);
+  }, [nodes, edges, deleteElements, getNode, dispatch]);
+
+  // Остальные функции без изменений...
   const onConnect = useCallback(
     (params: Connection) =>
       setEdges((eds) =>
@@ -188,7 +212,7 @@ export const Flow: React.FC = () => {
             type: ConnectionLineType.SmoothStep,
             animated: false,
             style: edgeStyles,
-            label: undefined, // Убираем подписи для новых связей
+            label: undefined,
           },
           eds
         )
@@ -196,7 +220,6 @@ export const Flow: React.FC = () => {
     [setEdges]
   );
 
-  // Функция для изменения лайаута
   const onLayout = useCallback(
     (direction: "TB" | "LR") => {
       const { nodes: layoutedNodes, edges: layoutedEdges } = applyLayoutToNodes(
@@ -211,7 +234,6 @@ export const Flow: React.FC = () => {
     [nodes, edges, setNodes, setEdges, fitView]
   );
 
-  // Функция для анализа зависимостей узла
   const getNodeDependencies = useCallback(
     (nodeId: string): string[] => {
       const currentEdges = getEdges();
@@ -221,29 +243,26 @@ export const Flow: React.FC = () => {
 
       while (stack.length > 0) {
         const currentId = stack.pop()!;
-
         if (visited.has(currentId)) continue;
         visited.add(currentId);
 
         const incomingEdges = currentEdges.filter(
           (edge) => edge.target === currentId
         );
-
         incomingEdges.forEach((edge) => {
           dependencies.add(edge.source);
           stack.push(edge.source);
         });
       }
-
       return Array.from(dependencies);
     },
     [getEdges]
   );
 
-  // Обработчик левого клика по узлу
   const onNodeClick = useCallback(
     (event: React.MouseEvent, node: Node) => {
       const nodeData = node.data as CustomNodeData;
+      const originalNode = apiData?.nodes.find(n => n["Id узла"] === node.id);
 
       setNodeMenu({
         id: node.id,
@@ -251,26 +270,18 @@ export const Flow: React.FC = () => {
         left: event.clientX + 10,
         label: nodeData.label,
         description: nodeData.description,
+        type: originalNode?.["Тип"] || ""
       });
 
       const dependencies = getNodeDependencies(node.id);
       console.log(`Узел ${nodeData.label} зависит от:`, dependencies);
     },
-    [getNodeDependencies]
+    [getNodeDependencies, apiData]
   );
 
-  // Отображение состояний загрузки и ошибок
   if (loading) {
     return (
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "center",
-          alignItems: "center",
-          height: "100vh",
-          flexDirection: "column",
-        }}
-      >
+      <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100vh", flexDirection: "column" }}>
         <div>Загрузка данных из GPT...</div>
       </div>
     );
@@ -291,14 +302,12 @@ export const Flow: React.FC = () => {
         nodeTypes={nodeTypes}
         fitView
         maxZoom={10}
-        // Улучшаем отображение связей
         defaultEdgeOptions={{
           type: "smoothstep",
           style: edgeStyles,
           animated: false,
-          label: undefined, // Убираем подписи по умолчанию
+          label: undefined,
         }}
-        // Улучшаем z-index для правильного отображения связей
         elevateEdgesOnSelect={false}
         elevateNodesOnSelect={false}
       >
@@ -312,7 +321,7 @@ export const Flow: React.FC = () => {
         </Panel>
         <Background />
 
-        {/* Меню узла */}
+        {/* Меню узла с кнопкой редактирования */}
         {nodeMenu && (
           <div
             style={{
@@ -330,32 +339,34 @@ export const Flow: React.FC = () => {
             }}
           >
             <div style={{ marginBottom: "12px" }}>
-              <h3
-                style={{ margin: "0 0 8px 0", fontSize: "16px", color: "#333" }}
-              >
+              <h3 style={{ margin: "0 0 8px 0", fontSize: "16px", color: "#333" }}>
                 {nodeMenu.label}
               </h3>
+              <p style={{ margin: "0 0 4px 0", fontSize: "12px", color: "#888" }}>
+                Тип: {nodeMenu.type}
+              </p>
               {nodeMenu.description && (
-                <p
-                  style={{
-                    margin: "0",
-                    fontSize: "14px",
-                    color: "#666",
-                    lineHeight: "1.4",
-                  }}
-                >
+                <p style={{ margin: "0", fontSize: "14px", color: "#666", lineHeight: "1.4" }}>
                   {nodeMenu.description}
                 </p>
               )}
             </div>
 
-            <div
-              style={{
-                display: "flex",
-                gap: "8px",
-                justifyContent: "flex-end",
-              }}
-            >
+            <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end", flexWrap: "wrap" }}>
+              <button
+                onClick={() => handleEditNode(nodeMenu.id)}
+                style={{
+                  background: "#007bff",
+                  border: "none",
+                  borderRadius: "4px",
+                  padding: "6px 12px",
+                  cursor: "pointer",
+                  color: "white",
+                  fontSize: "14px",
+                }}
+              >
+                Редактировать
+              </button>
               <button
                 onClick={() => setNodeMenu(null)}
                 style={{
@@ -382,6 +393,97 @@ export const Flow: React.FC = () => {
                 }}
               >
                 Удалить
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Модальное окно редактирования */}
+        {editingNode && (
+          <div
+            style={{
+              position: "fixed",
+              top: "50%",
+              left: "50%",
+              transform: "translate(-50%, -50%)",
+              background: "white",
+              border: "1px solid #ccc",
+              borderRadius: "8px",
+              padding: "24px",
+              zIndex: 1001,
+              boxShadow: "0 8px 30px rgba(0,0,0,0.2)",
+              minWidth: "400px",
+              maxWidth: "500px",
+            }}
+          >
+            <h3 style={{ margin: "0 0 16px 0", fontSize: "18px" }}>
+              Редактирование узла
+            </h3>
+            
+            <div style={{ marginBottom: "16px" }}>
+              <label style={{ display: "block", marginBottom: "8px", fontSize: "14px", fontWeight: "bold" }}>
+                Название:
+              </label>
+              <input
+                type="text"
+                value={editingNode.label}
+                onChange={(e) => setEditingNode(prev => prev ? {...prev, label: e.target.value} : null)}
+                style={{
+                  width: "100%",
+                  padding: "8px",
+                  border: "1px solid #ddd",
+                  borderRadius: "4px",
+                  fontSize: "14px",
+                }}
+              />
+            </div>
+
+            <div style={{ marginBottom: "16px" }}>
+              <label style={{ display: "block", marginBottom: "8px", fontSize: "14px", fontWeight: "bold" }}>
+                Описание:
+              </label>
+              <textarea
+                value={editingNode.description}
+                onChange={(e) => setEditingNode(prev => prev ? {...prev, description: e.target.value} : null)}
+                style={{
+                  width: "100%",
+                  padding: "8px",
+                  border: "1px solid #ddd",
+                  borderRadius: "4px",
+                  fontSize: "14px",
+                  minHeight: "80px",
+                  resize: "vertical",
+                }}
+              />
+            </div>
+
+            <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
+              <button
+                onClick={handleCancelEdit}
+                style={{
+                  background: "#f5f5f5",
+                  border: "1px solid #ddd",
+                  borderRadius: "4px",
+                  padding: "8px 16px",
+                  cursor: "pointer",
+                  fontSize: "14px",
+                }}
+              >
+                Отмена
+              </button>
+              <button
+                onClick={handleSaveNode}
+                style={{
+                  background: "#007bff",
+                  border: "none",
+                  borderRadius: "4px",
+                  padding: "8px 16px",
+                  cursor: "pointer",
+                  color: "white",
+                  fontSize: "14px",
+                }}
+              >
+                Сохранить
               </button>
             </div>
           </div>

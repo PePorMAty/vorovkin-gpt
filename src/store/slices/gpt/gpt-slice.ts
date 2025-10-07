@@ -1,13 +1,10 @@
-import { createAsyncThunk, createSlice } from "@reduxjs/toolkit";
+import { configFile } from './../../../utils/config';
+import { createAsyncThunk, createSlice, type PayloadAction } from "@reduxjs/toolkit";
 import axios from "axios";
-import { configFile } from "../../../config";
-import type { ApiResponse } from "../../../types";
 
-export interface InitialStateI {
-  data: ApiResponse | null;
-  loading: boolean;
-  error: boolean | null;
-}
+import type { ApiResponse, InitialStateI, InputNode } from "../../../types";
+
+
 
 const initialState: InitialStateI = {
   loading: false,
@@ -30,7 +27,7 @@ export const gptRequest = createAsyncThunk<ApiResponse, string>(
         },
         {
           headers: {
-            Authorization: `Bearer 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`,
+            Authorization: `Bearer ${configFile.API_KEY}`,
             "Content-Type": "application/json",
           },
         }
@@ -91,7 +88,69 @@ export const gptRequest = createAsyncThunk<ApiResponse, string>(
 const gptReducer = createSlice({
   name: "gpt",
   initialState,
-  reducers: {},
+  reducers: {
+    // Обновление узла
+    updateNode: (state, action: PayloadAction<{
+      nodeId: string;
+      updates: Partial<InputNode>;
+    }>) => {
+      if (state.data?.nodes) {
+        const nodeIndex = state.data.nodes.findIndex(
+          node => node["Id узла"] === action.payload.nodeId
+        );
+        
+        if (nodeIndex !== -1) {
+          state.data.nodes[nodeIndex] = {
+            ...state.data.nodes[nodeIndex],
+            ...action.payload.updates
+          };
+        }
+      }
+    },
+    
+    // Добавление нового узла
+    addNode: (state, action: PayloadAction<InputNode>) => {
+      if (state.data?.nodes) {
+        state.data.nodes.push(action.payload);
+      }
+    },
+    
+    // Удаление узла
+    deleteNode: (state, action: PayloadAction<string>) => {
+      if (state.data?.nodes) {
+        state.data.nodes = state.data.nodes.filter(
+          node => node["Id узла"] !== action.payload
+        );
+      }
+    },
+    
+    // Обновление связей узла
+    updateNodeConnections: (state, action: PayloadAction<{
+      nodeId: string;
+      inputs?: string[];
+      outputs?: string[];
+    }>) => {
+      if (state.data?.nodes) {
+        const nodeIndex = state.data.nodes.findIndex(
+          node => node["Id узла"] === action.payload.nodeId
+        );
+        
+        if (nodeIndex !== -1) {
+          if (action.payload.inputs !== undefined) {
+            state.data.nodes[nodeIndex]["Входы"] = action.payload.inputs;
+          }
+          if (action.payload.outputs !== undefined) {
+            state.data.nodes[nodeIndex]["Выходы"] = action.payload.outputs;
+          }
+        }
+      }
+    },
+    
+    // Сброс к исходным данным
+    resetToInitial: (state, action: PayloadAction<ApiResponse>) => {
+      state.data = action.payload;
+    }
+  },
   extraReducers: (builder) => {
     builder.addCase(gptRequest.pending, (state) => {
       state.loading = true;
@@ -107,4 +166,16 @@ const gptReducer = createSlice({
   },
 });
 
+// Экспортируем actions для использования в компонентах
+export const { 
+  updateNode, 
+  addNode, 
+  deleteNode, 
+  updateNodeConnections,
+  resetToInitial 
+} = gptReducer.actions;
+
 export default gptReducer.reducer;
+
+
+

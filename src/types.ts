@@ -24,6 +24,18 @@ export interface CustomNodeData {
   [key: string]: unknown;
 }
 
+// Добавьте тип для действия обновления узла
+export interface UpdateNodePayload {
+  nodeId: string;
+  updates: Partial<InputNode>;
+}
+
+export interface InitialStateI {
+  data: ApiResponse | null;
+  loading: boolean;
+  error: boolean | null;
+}
+
 export type CustomNode = Node<CustomNodeData>;
 export type CustomEdge = Edge;
 
