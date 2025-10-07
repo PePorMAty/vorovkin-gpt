@@ -12,6 +12,14 @@ export interface InputNode {
   [key: string]: unknown;
 }
 
+// Добавьте тип для создания нового узла
+export interface NewNodeData {
+  type: 'product' | 'transformation';
+  label: string;
+  description?: string;
+  parentId?: string; // ID родительского узла, если узел создается через связь
+}
+
 export interface ApiResponse {
   nodes: InputNode[];
   has_more?: boolean;

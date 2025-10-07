@@ -7,6 +7,7 @@ import {
   type ApiResponse,
 } from "../types";
 
+// dataTransformer.ts
 export function transformApiDataToFlow(apiData: ApiResponse): {
   nodes: CustomNode[];
   edges: CustomEdge[];
@@ -37,72 +38,64 @@ export function transformApiDataToFlow(apiData: ApiResponse): {
       type: nodeType,
       position: { x: 0, y: index * 100 },
       data: nodeData,
-      draggable: false,
+      draggable: true, // Разрешаем перетаскивание
     };
 
     nodes.push(node);
   });
 
-  // Создаем связи БЕЗ подписей
+  // Создаем связи
   apiData.nodes.forEach((item) => {
-    if (item["Тип"].toLowerCase().includes("преобразование")) {
-      const transformationId = item["Id узла"];
+    // Создаем связи для входов
+    if (item["Входы"] && Array.isArray(item["Входы"])) {
+      item["Входы"].forEach((inputId, index) => {
+        const sourceNodeExists = nodes.some((node) => node.id === inputId);
+        const targetNodeExists = nodes.some(
+          (node) => node.id === item["Id узла"]
+        );
 
-      // Создаем связи для входов
-      if (item["Входы"] && Array.isArray(item["Входы"])) {
-        item["Входы"].forEach((inputId, index) => {
-          const sourceNodeExists = nodes.some((node) => node.id === inputId);
-          const targetNodeExists = nodes.some(
-            (node) => node.id === transformationId
-          );
+        if (sourceNodeExists && targetNodeExists) {
+          const edge: CustomEdge = {
+            id: `${inputId}-${item["Id узла"]}-input-${index}`,
+            source: inputId,
+            target: item["Id узла"],
+            type: "smoothstep",
+            animated: false,
+            label: undefined,
+            style: {
+              stroke: "#b1b1b7",
+              strokeWidth: 2,
+            },
+          };
+          edges.push(edge);
+        }
+      });
+    }
 
-          if (sourceNodeExists && targetNodeExists) {
-            const edge: CustomEdge = {
-              id: `${inputId}-${transformationId}-input-${index}`,
-              source: inputId,
-              target: transformationId,
-              type: "smoothstep",
-              animated: false,
-              // Убираем все подписи
-              label: undefined,
-              // Улучшаем стиль связей
-              style: {
-                stroke: "#b1b1b7",
-                strokeWidth: 2,
-              },
-            };
-            edges.push(edge);
-          }
-        });
-      }
+    // Создаем связи для выходов
+    if (item["Выходы"] && Array.isArray(item["Выходы"])) {
+      item["Выходы"].forEach((outputId, index) => {
+        const sourceNodeExists = nodes.some(
+          (node) => node.id === item["Id узла"]
+        );
+        const targetNodeExists = nodes.some((node) => node.id === outputId);
 
-      // Создаем связи для выходов
-      if (item["Выходы"] && Array.isArray(item["Выходы"])) {
-        item["Выходы"].forEach((outputId, index) => {
-          const sourceNodeExists = nodes.some(
-            (node) => node.id === transformationId
-          );
-          const targetNodeExists = nodes.some((node) => node.id === outputId);
-
-          if (sourceNodeExists && targetNodeExists) {
-            const edge: CustomEdge = {
-              id: `${transformationId}-${outputId}-output-${index}`,
-              source: transformationId,
-              target: outputId,
-              type: "smoothstep",
-              animated: false,
-              // Убираем все подписи
-              label: undefined,
-              // Улучшаем стиль связей
-              style: {
-                stroke: "#b1b1b7",
-                strokeWidth: 2,
-              },
-            };
-            edges.push(edge);
-          }
-        });
-      }
+        if (sourceNodeExists && targetNodeExists) {
+          const edge: CustomEdge = {
+            id: `${item["Id узла"]}-${outputId}-output-${index}`,
+            source: item["Id узла"],
+            target: outputId,
+            type: "smoothstep",
+            animated: false,
+            label: undefined,
+            style: {
+              stroke: "#b1b1b7",
+              strokeWidth: 2,
+            },
+          };
+          edges.push(edge);
+        }
+      });
     }
   });
 
@@ -114,6 +107,8 @@ export function transformApiDataToFlow(apiData: ApiResponse): {
   );
   return { nodes, edges };
 }
+
+// ... остальной код без изменений ...
 
 export function applyLayoutToNodes(
   nodes: CustomNode[],

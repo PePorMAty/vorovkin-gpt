@@ -1,6 +1,6 @@
 // Flow.tsx
 import React, { useCallback, useState, useEffect } from "react";
-import { useSelector, useDispatch } from "react-redux"; // Добавляем useDispatch
+import { useSelector, useDispatch } from "react-redux";
 import {
   Background,
   ReactFlow,
@@ -15,9 +15,9 @@ import {
   type Connection,
   type NodeChange,
   type EdgeChange,
-  getIncomers,
   getConnectedEdges,
   type NodeTypes,
+  ConnectionMode,
 } from "@xyflow/react";
 
 import "@xyflow/react/dist/style.css";
@@ -30,8 +30,7 @@ import type { CustomNode, CustomEdge, CustomNodeData } from "./types";
 import type { RootState } from "./store/store";
 import { ProductNode } from "./components/product-node";
 import { TransformationNode } from "./components/transformation-node";
-import { deleteNode, updateNode } from "./store/slices/gpt/gpt-slice";
- // Импортируем actions
+import { updateNode, deleteNode, addConnection, removeConnection, addNode } from "./store/slices/gpt/gpt-slice";
 
 const nodeTypes: NodeTypes = {
   product: ProductNode,
@@ -44,14 +43,14 @@ const edgeStyles = {
 };
 
 export const Flow: React.FC = () => {
-  const dispatch = useDispatch(); // Добавляем dispatch
+  const dispatch = useDispatch();
   const { data: apiData, loading } = useSelector(
     (state: RootState) => state.gpt
   );
 
   const [nodes, setNodes, onNodesChange] = useNodesState<CustomNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<CustomEdge>([]);
-  const { getEdges, deleteElements, getNode, fitView } = useReactFlow();
+  const { deleteElements, getNode, fitView } = useReactFlow(); // Убрали getEdges
 
   const [nodeMenu, setNodeMenu] = useState<{
     id: string;
@@ -60,15 +59,34 @@ export const Flow: React.FC = () => {
     label: string;
     description?: string;
     type: string;
+    nodeType: 'product' | 'transformation';
   } | null>(null);
 
-  // Состояние для редактирования
+  const [edgeMenu, setEdgeMenu] = useState<{
+    id: string;
+    top: number;
+    left: number;
+    sourceId: string;
+    targetId: string;
+  } | null>(null);
+
   const [editingNode, setEditingNode] = useState<{
     id: string;
     label: string;
     description: string;
     type: string;
   } | null>(null);
+
+  const [newNodeModal, setNewNodeModal] = useState<{
+    parentId: string;
+    parentType: 'product' | 'transformation';
+    newNodeType: 'product' | 'transformation';
+  } | null>(null);
+
+  const [newNodeData, setNewNodeData] = useState({
+    label: '',
+    description: ''
+  });
 
   // Загрузка и преобразование данных из store
   useEffect(() => {
@@ -104,6 +122,74 @@ export const Flow: React.FC = () => {
       }
     }
   }, [apiData, setNodes, setEdges, fitView]);
+
+  // Функция для проверки допустимости связи (исправленная версия)
+  const isValidConnection = useCallback(
+    (edge: Connection | Edge) => {
+      // Приводим к Connection для единообразия
+      const connection = edge as Connection;
+      
+      if (!connection.source || !connection.target) return false;
+
+      const sourceNode = getNode(connection.source);
+      const targetNode = getNode(connection.target);
+
+      if (!sourceNode || !targetNode) return false;
+
+      const sourceType = sourceNode.type;
+      const targetType = targetNode.type;
+
+      // Разрешаем связи только: Продукт -> Преобразование и Преобразование -> Продукт
+      // Запрещаем: Продукт -> Продукт и Преобразование -> Преобразование
+      return (
+        (sourceType === 'product' && targetType === 'transformation') ||
+        (sourceType === 'transformation' && targetType === 'product')
+      );
+    },
+    [getNode]
+  );
+
+  // Функция для получения доступного типа узла для добавления
+  const getAvailableNodeType = useCallback((nodeType: 'product' | 'transformation'): 'product' | 'transformation' => {
+    return nodeType === 'product' ? 'transformation' : 'product';
+  }, []);
+
+  // Функция для открытия модалки добавления нового узла
+  const handleAddNewNode = useCallback((parentId: string, parentType: 'product' | 'transformation') => {
+    const newNodeType = getAvailableNodeType(parentType);
+    setNewNodeModal({
+      parentId,
+      parentType,
+      newNodeType
+    });
+    setNewNodeData({
+      label: '',
+      description: ''
+    });
+    setNodeMenu(null);
+  }, [getAvailableNodeType]);
+
+  // Функция для сохранения нового узла (исправленная версия)
+  const handleSaveNewNode = useCallback(() => {
+  if (newNodeModal && newNodeData.label.trim()) {
+    dispatch(addNode({
+      nodeData: {
+        type: newNodeModal.newNodeType,
+        label: newNodeData.label,
+        description: newNodeData.description
+      },
+      parentId: newNodeModal.parentId
+    }));
+    setNewNodeModal(null);
+    setNewNodeData({ label: '', description: '' });
+  }
+}, [newNodeModal, newNodeData, dispatch]);
+
+  // Функция для отмены создания нового узла
+  const handleCancelNewNode = useCallback(() => {
+    setNewNodeModal(null);
+    setNewNodeData({ label: '', description: '' });
+  }, []);
 
   // Функция для начала редактирования узла
   const handleEditNode = useCallback((nodeId: string) => {
@@ -141,70 +227,52 @@ export const Flow: React.FC = () => {
     setEditingNode(null);
   }, []);
 
-  // Обновленная функция удаления узла
+  // Упрощенная функция удаления узла (только выбранный узел)
   const handleDeleteNode = useCallback((nodeId: string) => {
     const nodeToDelete = getNode(nodeId);
     if (!nodeToDelete) return;
 
-    const nodesToDelete = new Set<string>([nodeId]);
-    const edgesToDelete = new Set<string>();
-
-    const findAllDescendants = (nodeId: string, allNodes: Node[], allEdges: Edge[]): Node[] => {
-      const visited = new Set<string>();
-      const stack: string[] = [nodeId];
-      const descendants: Node[] = [];
-
-      while (stack.length > 0) {
-        const currentId = stack.pop()!;
-        if (visited.has(currentId)) continue;
-        visited.add(currentId);
-
-        const outgoingEdges = allEdges.filter((edge) => edge.source === currentId);
-        outgoingEdges.forEach((edge) => {
-          if (!visited.has(edge.target)) {
-            const childNode = allNodes.find((node) => node.id === edge.target);
-            if (childNode) {
-              descendants.push(childNode);
-              stack.push(edge.target);
-            }
-          }
-        });
-      }
-      return descendants;
-    };
-
-    const allDescendants = findAllDescendants(nodeId, nodes, edges);
-    allDescendants.forEach((descendant) => {
-      const allParents = getIncomers(descendant, nodes, edges);
-      const remainingParents = allParents.filter(
-        (parent) => !nodesToDelete.has(parent.id)
-      );
-      if (remainingParents.length === 0) {
-        nodesToDelete.add(descendant.id);
-      }
-    });
-
-    const nodesToDeleteObjects = nodes.filter((node) =>
-      nodesToDelete.has(node.id)
-    );
-    const connectedEdges = getConnectedEdges(nodesToDeleteObjects, edges);
-    connectedEdges.forEach((edge) => edgesToDelete.add(edge.id));
+    // Находим все связи, связанные с этим узлом
+    const connectedEdges = getConnectedEdges([nodeToDelete], edges);
+    const edgeIdsToDelete = connectedEdges.map(edge => edge.id);
 
     // Удаляем из Redux store
     dispatch(deleteNode(nodeId));
     
     // Удаляем из React Flow
     deleteElements({
-      nodes: Array.from(nodesToDelete).map((id) => ({ id })),
-      edges: Array.from(edgesToDelete).map((id) => ({ id })),
+      nodes: [{ id: nodeId }],
+      edges: edgeIdsToDelete.map(id => ({ id })),
     });
     
     setNodeMenu(null);
-  }, [nodes, edges, deleteElements, getNode, dispatch]);
+  }, [edges, deleteElements, getNode, dispatch]);
 
-  // Остальные функции без изменений...
+  // Функция для удаления связи
+  const handleDeleteEdge = useCallback((edgeId: string) => {
+    const edge = edges.find(e => e.id === edgeId);
+    if (edge) {
+      // Удаляем связь из Redux store
+      dispatch(removeConnection({
+        sourceId: edge.source,
+        targetId: edge.target
+      }));
+      
+      // Удаляем связь из React Flow
+      setEdges(eds => eds.filter(e => e.id !== edgeId));
+    }
+    setEdgeMenu(null);
+  }, [edges, setEdges, dispatch]);
+
+  // Обработчик создания связей
   const onConnect = useCallback(
-    (params: Connection) =>
+    (params: Connection) => {
+      if (!isValidConnection(params)) {
+        console.log('Недопустимая связь');
+        return;
+      }
+
+      // Добавляем связь в React Flow
       setEdges((eds) =>
         addEdge(
           {
@@ -216,8 +284,54 @@ export const Flow: React.FC = () => {
           },
           eds
         )
-      ),
-    [setEdges]
+      );
+
+      // Добавляем связь в Redux store
+      if (params.source && params.target) {
+        dispatch(addConnection({
+          sourceId: params.source,
+          targetId: params.target
+        }));
+      }
+    },
+    [setEdges, dispatch, isValidConnection]
+  );
+
+  // Обработчик клика по связи
+  const onEdgeClick = useCallback(
+    (event: React.MouseEvent, edge: Edge) => {
+      setEdgeMenu({
+        id: edge.id,
+        top: event.clientY + 10,
+        left: event.clientX + 10,
+        sourceId: edge.source,
+        targetId: edge.target,
+      });
+      setNodeMenu(null); // Закрываем меню узла если открыто
+    },
+    []
+  );
+
+  // Обработчик удаления связей через изменения
+  const onEdgesChangeCustom = useCallback(
+    (changes: EdgeChange[]) => {
+      changes.forEach(change => {
+        if (change.type === 'remove') {
+          const edge = edges.find(e => e.id === change.id);
+          if (edge) {
+            // Удаляем связь из Redux store
+            dispatch(removeConnection({
+              sourceId: edge.source,
+              targetId: edge.target
+            }));
+          }
+        }
+      });
+      
+      // Применяем стандартные изменения
+      onEdgesChange(changes);
+    },
+    [edges, onEdgesChange, dispatch]
   );
 
   const onLayout = useCallback(
@@ -234,31 +348,6 @@ export const Flow: React.FC = () => {
     [nodes, edges, setNodes, setEdges, fitView]
   );
 
-  const getNodeDependencies = useCallback(
-    (nodeId: string): string[] => {
-      const currentEdges = getEdges();
-      const dependencies = new Set<string>();
-      const stack: string[] = [nodeId];
-      const visited = new Set<string>();
-
-      while (stack.length > 0) {
-        const currentId = stack.pop()!;
-        if (visited.has(currentId)) continue;
-        visited.add(currentId);
-
-        const incomingEdges = currentEdges.filter(
-          (edge) => edge.target === currentId
-        );
-        incomingEdges.forEach((edge) => {
-          dependencies.add(edge.source);
-          stack.push(edge.source);
-        });
-      }
-      return Array.from(dependencies);
-    },
-    [getEdges]
-  );
-
   const onNodeClick = useCallback(
     (event: React.MouseEvent, node: Node) => {
       const nodeData = node.data as CustomNodeData;
@@ -270,13 +359,12 @@ export const Flow: React.FC = () => {
         left: event.clientX + 10,
         label: nodeData.label,
         description: nodeData.description,
-        type: originalNode?.["Тип"] || ""
+        type: originalNode?.["Тип"] || "",
+        nodeType: node.type as 'product' | 'transformation'
       });
-
-      const dependencies = getNodeDependencies(node.id);
-      console.log(`Узел ${nodeData.label} зависит от:`, dependencies);
+      setEdgeMenu(null); // Закрываем меню связи если открыто
     },
-    [getNodeDependencies, apiData]
+    [apiData]
   );
 
   if (loading) {
@@ -293,12 +381,16 @@ export const Flow: React.FC = () => {
         nodes={nodes}
         edges={edges}
         onNodesChange={onNodesChange as (changes: NodeChange[]) => void}
-        onEdgesChange={onEdgesChange as (changes: EdgeChange[]) => void}
+        onEdgesChange={onEdgesChangeCustom as (changes: EdgeChange[]) => void}
         onConnect={onConnect}
         onNodeClick={onNodeClick}
-        onPaneClick={() => setNodeMenu(null)}
+        onEdgeClick={onEdgeClick}
+        onPaneClick={() => {
+          setNodeMenu(null);
+          setEdgeMenu(null);
+        }}
         connectionLineType={ConnectionLineType.SmoothStep}
-        nodesDraggable={false}
+        nodesDraggable={true}
         nodeTypes={nodeTypes}
         fitView
         maxZoom={10}
@@ -308,20 +400,53 @@ export const Flow: React.FC = () => {
           animated: false,
           label: undefined,
         }}
-        elevateEdgesOnSelect={false}
-        elevateNodesOnSelect={false}
+        // Исправленные пропсы для новой версии React Flow
+        elevateEdgesOnSelect={true}
+        elevateNodesOnSelect={true}
+        selectNodesOnDrag={false}
+        connectionMode={ConnectionMode.Loose}
+        deleteKeyCode={null} // Отключаем удаление по клавише Delete
+        isValidConnection={isValidConnection}
       >
         <Panel position="top-right">
-          <button className="xy-theme__button" onClick={() => onLayout("TB")}>
+          
+          <button 
+            onClick={() => onLayout("TB")}
+            style={{
+              background: "#007bff",
+              color: "white",
+              border: "none",
+              padding: "8px 16px",
+              borderRadius: "4px",
+              cursor: "pointer",
+              margin: "4px",
+            }}
+          >
             Вертикальный layout
           </button>
-          <button className="xy-theme__button" onClick={() => onLayout("LR")}>
+          <button 
+            onClick={() => onLayout("LR")}
+            style={{
+              background: "#007bff",
+              color: "white",
+              border: "none",
+              padding: "8px 16px",
+              borderRadius: "4px",
+              cursor: "pointer",
+              margin: "4px",
+            }}
+          >
             Горизонтальный layout
           </button>
+          <div style={{ background: 'white', padding: '8px', borderRadius: '4px', fontSize: '12px', float: "left" }}>
+          <div>Узлы: {nodes.length}</div>
+            <div>Связи: {edges.length}</div>
+            <div>API данные: {apiData ? '✓' : '✗'}</div>
+            </div>
         </Panel>
         <Background />
 
-        {/* Меню узла с кнопкой редактирования */}
+        {/* Меню узла */}
         {nodeMenu && (
           <div
             style={{
@@ -353,6 +478,20 @@ export const Flow: React.FC = () => {
             </div>
 
             <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end", flexWrap: "wrap" }}>
+              <button
+                onClick={() => handleAddNewNode(nodeMenu.id, nodeMenu.nodeType)}
+                style={{
+                  background: "#28a745",
+                  border: "none",
+                  borderRadius: "4px",
+                  padding: "6px 12px",
+                  cursor: "pointer",
+                  color: "white",
+                  fontSize: "14px",
+                }}
+              >
+                Добавить связь {nodeMenu.nodeType === 'product' ? 'Преобразование' : 'Продукт'}
+              </button>
               <button
                 onClick={() => handleEditNode(nodeMenu.id)}
                 style={{
@@ -393,6 +532,169 @@ export const Flow: React.FC = () => {
                 }}
               >
                 Удалить
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Меню связи */}
+        {edgeMenu && (
+          <div
+            style={{
+              position: "fixed",
+              top: edgeMenu.top,
+              left: edgeMenu.left,
+              background: "white",
+              border: "1px solid #ccc",
+              borderRadius: "8px",
+              padding: "16px",
+              zIndex: 1000,
+              boxShadow: "0 4px 20px rgba(0,0,0,0.15)",
+              minWidth: "150px",
+            }}
+          >
+            <div style={{ marginBottom: "12px" }}>
+              <h3 style={{ margin: "0 0 8px 0", fontSize: "16px", color: "#333" }}>
+                Связь
+              </h3>
+              <p style={{ margin: "0", fontSize: "12px", color: "#666" }}>
+                ID: {edgeMenu.id}
+              </p>
+            </div>
+
+            <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
+              <button
+                onClick={() => setEdgeMenu(null)}
+                style={{
+                  background: "#f5f5f5",
+                  border: "1px solid #ddd",
+                  borderRadius: "4px",
+                  padding: "6px 12px",
+                  cursor: "pointer",
+                  fontSize: "14px",
+                }}
+              >
+                Закрыть
+              </button>
+              <button
+                onClick={() => handleDeleteEdge(edgeMenu.id)}
+                style={{
+                  background: "#ff3b30",
+                  border: "none",
+                  borderRadius: "4px",
+                  padding: "6px 12px",
+                  cursor: "pointer",
+                  color: "white",
+                  fontSize: "14px",
+                }}
+              >
+                Удалить связь
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Модальное окно добавления нового узла */}
+        {newNodeModal && (
+          <div
+            style={{
+              position: "fixed",
+              top: "50%",
+              left: "50%",
+              transform: "translate(-50%, -50%)",
+              background: "white",
+              border: "1px solid #ccc",
+              borderRadius: "8px",
+              padding: "24px",
+              zIndex: 1001,
+              boxShadow: "0 8px 30px rgba(0,0,0,0.2)",
+              minWidth: "400px",
+              maxWidth: "500px",
+            }}
+          >
+            <h3 style={{ margin: "0 0 16px 0", fontSize: "18px" }}>
+              Добавить новый узел
+            </h3>
+            
+            <div style={{ marginBottom: "16px" }}>
+              <p style={{ margin: "0 0 8px 0", fontSize: "14px", color: "#666" }}>
+                Тип нового узла: <strong>{newNodeModal.newNodeType === 'product' ? 'Продукт' : 'Преобразование'}</strong>
+              </p>
+              <p style={{ margin: "0 0 16px 0", fontSize: "12px", color: "#888" }}>
+                {newNodeModal.parentType === 'product' 
+                  ? 'Продукт может быть связан только с Преобразованием' 
+                  : 'Преобразование может быть связано только с Продуктом'}
+              </p>
+            </div>
+
+            <div style={{ marginBottom: "16px" }}>
+              <label style={{ display: "block", marginBottom: "8px", fontSize: "14px", fontWeight: "bold" }}>
+                Название:
+              </label>
+              <input
+                type="text"
+                value={newNodeData.label}
+                onChange={(e) => setNewNodeData(prev => ({...prev, label: e.target.value}))}
+                placeholder="Введите название узла"
+                style={{
+                  width: "100%",
+                  padding: "8px",
+                  border: "1px solid #ddd",
+                  borderRadius: "4px",
+                  fontSize: "14px",
+                }}
+              />
+            </div>
+
+            <div style={{ marginBottom: "16px" }}>
+              <label style={{ display: "block", marginBottom: "8px", fontSize: "14px", fontWeight: "bold" }}>
+                Описание (необязательно):
+              </label>
+              <textarea
+                value={newNodeData.description}
+                onChange={(e) => setNewNodeData(prev => ({...prev, description: e.target.value}))}
+                placeholder="Введите описание узла"
+                style={{
+                  width: "100%",
+                  padding: "8px",
+                  border: "1px solid #ddd",
+                  borderRadius: "4px",
+                  fontSize: "14px",
+                  minHeight: "80px",
+                  resize: "vertical",
+                }}
+              />
+            </div>
+
+            <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
+              <button
+                onClick={handleCancelNewNode}
+                style={{
+                  background: "#f5f5f5",
+                  border: "1px solid #ddd",
+                  borderRadius: "4px",
+                  padding: "8px 16px",
+                  cursor: "pointer",
+                  fontSize: "14px",
+                }}
+              >
+                Отмена
+              </button>
+              <button
+                onClick={handleSaveNewNode}
+                disabled={!newNodeData.label.trim()}
+                style={{
+                  background: "#28a745",
+                  border: "none",
+                  borderRadius: "4px",
+                  padding: "8px 16px",
+                  cursor: newNodeData.label.trim() ? "pointer" : "not-allowed",
+                  color: "white",
+                  fontSize: "14px",
+                  opacity: newNodeData.label.trim() ? 1 : 0.6,
+                }}
+              >
+                Добавить узел
               </button>
             </div>
           </div>

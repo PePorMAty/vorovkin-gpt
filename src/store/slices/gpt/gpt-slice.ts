@@ -14,6 +14,9 @@ const initialState: InitialStateI = {
   error: false,
 };
 
+// Функция для генерации уникального ID
+const generateNodeId = () => `node_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
 export const gptRequest = createAsyncThunk<ApiResponse, string>(
   "gptReducer/gptRequest",
   async (gptPromt, thunkAPI) => {
@@ -109,39 +112,129 @@ const gptReducer = createSlice({
     },
     
     // Добавление нового узла
-    addNode: (state, action: PayloadAction<InputNode>) => {
+     // Добавление нового узла (исправленная сигнатура)
+    addNode: (state, action: PayloadAction<{
+      nodeData: {
+        type: 'product' | 'transformation';
+        label: string;
+        description?: string;
+      };
+      parentId?: string; // ID родительского узла для создания связи
+    }>) => {
       if (state.data?.nodes) {
-        state.data.nodes.push(action.payload);
+        const { nodeData, parentId } = action.payload;
+        const newNodeId = generateNodeId();
+        
+        // Создаем новый узел
+        const newNode: InputNode = {
+          "Id узла": newNodeId,
+          "Тип": nodeData.type === 'product' ? 'Продукт' : 'Преобразование',
+          "Название": nodeData.label,
+          "Описание": nodeData.description || '',
+          "Входы": [],
+          "Выходы": [],
+        };
+
+        // Добавляем новый узел
+        state.data.nodes.push(newNode);
+
+        // Если указан родительский узел, создаем связь
+        if (parentId) {
+          const parentNode = state.data.nodes.find(node => node["Id узла"] === parentId);
+          
+          if (parentNode) {
+            // Определяем направление связи в зависимости от типов
+            if (parentNode["Тип"]?.toLowerCase().includes("продукт") && nodeData.type === 'transformation') {
+              // Продукт -> Преобразование
+              if (!parentNode["Выходы"]) parentNode["Выходы"] = [];
+              parentNode["Выходы"].push(newNodeId);
+              
+              if (!newNode["Входы"]) newNode["Входы"] = [];
+              newNode["Входы"].push(parentId);
+            } else if (parentNode["Тип"]?.toLowerCase().includes("преобразование") && nodeData.type === 'product') {
+              // Преобразование -> Продукт
+              if (!parentNode["Выходы"]) parentNode["Выходы"] = [];
+              parentNode["Выходы"].push(newNodeId);
+              
+              if (!newNode["Входы"]) newNode["Входы"] = [];
+              newNode["Входы"].push(parentId);
+            }
+          }
+        }
       }
     },
     
-    // Удаление узла
+    // Удаление только одного узла (без потомков)
     deleteNode: (state, action: PayloadAction<string>) => {
       if (state.data?.nodes) {
         state.data.nodes = state.data.nodes.filter(
           node => node["Id узла"] !== action.payload
         );
+        
+        // Также удаляем все связи, связанные с этим узлом
+        state.data.nodes.forEach(node => {
+          // Удаляем из входов других узлов
+          if (node["Входы"] && Array.isArray(node["Входы"])) {
+            node["Входы"] = node["Входы"].filter(inputId => inputId !== action.payload);
+          }
+          // Удаляем из выходов других узлов
+          if (node["Выходы"] && Array.isArray(node["Выходы"])) {
+            node["Выходы"] = node["Выходы"].filter(outputId => outputId !== action.payload);
+          }
+        });
       }
     },
     
-    // Обновление связей узла
-    updateNodeConnections: (state, action: PayloadAction<{
-      nodeId: string;
-      inputs?: string[];
-      outputs?: string[];
+    // Добавление связи между узлами
+    addConnection: (state, action: PayloadAction<{
+      sourceId: string;
+      targetId: string;
     }>) => {
       if (state.data?.nodes) {
-        const nodeIndex = state.data.nodes.findIndex(
-          node => node["Id узла"] === action.payload.nodeId
-        );
+        const { sourceId, targetId } = action.payload;
         
-        if (nodeIndex !== -1) {
-          if (action.payload.inputs !== undefined) {
-            state.data.nodes[nodeIndex]["Входы"] = action.payload.inputs;
+        // Находим source узел (преобразование) и добавляем выход
+        const sourceNode = state.data.nodes.find(node => node["Id узла"] === sourceId);
+        if (sourceNode && sourceNode["Тип"]?.toLowerCase().includes("преобразование")) {
+          if (!sourceNode["Выходы"]) {
+            sourceNode["Выходы"] = [];
           }
-          if (action.payload.outputs !== undefined) {
-            state.data.nodes[nodeIndex]["Выходы"] = action.payload.outputs;
+          if (!sourceNode["Выходы"].includes(targetId)) {
+            sourceNode["Выходы"].push(targetId);
           }
+        }
+        
+        // Находим target узел и добавляем вход
+        const targetNode = state.data.nodes.find(node => node["Id узла"] === targetId);
+        if (targetNode) {
+          if (!targetNode["Входы"]) {
+            targetNode["Входы"] = [];
+          }
+          if (!targetNode["Входы"].includes(sourceId)) {
+            targetNode["Входы"].push(sourceId);
+          }
+        }
+      }
+    },
+    
+    // Удаление связи между узлами
+    removeConnection: (state, action: PayloadAction<{
+      sourceId: string;
+      targetId: string;
+    }>) => {
+      if (state.data?.nodes) {
+        const { sourceId, targetId } = action.payload;
+        
+        // Удаляем выход из source узла
+        const sourceNode = state.data.nodes.find(node => node["Id узла"] === sourceId);
+        if (sourceNode && sourceNode["Выходы"]) {
+          sourceNode["Выходы"] = sourceNode["Выходы"].filter(id => id !== targetId);
+        }
+        
+        // Удаляем вход из target узла
+        const targetNode = state.data.nodes.find(node => node["Id узла"] === targetId);
+        if (targetNode && targetNode["Входы"]) {
+          targetNode["Входы"] = targetNode["Входы"].filter(id => id !== sourceId);
         }
       }
     },
@@ -171,11 +264,17 @@ export const {
   updateNode, 
   addNode, 
   deleteNode, 
-  updateNodeConnections,
+  addConnection,
+  removeConnection,
   resetToInitial 
 } = gptReducer.actions;
 
 export default gptReducer.reducer;
+
+
+
+
+  
 
 
 
